@@ -1,0 +1,51 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nputop"
+version = "0.1.0"
+description = "A lightweight TUI monitor for the AMD XDNA2 NPU"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+authors = [{ name = "Maria Olsen" }]
+keywords = ["npu", "amdxdna", "xdna2", "strix-halo", "ryzen-ai", "tui", "monitor"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: System Administrators",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: System :: Monitoring",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "rich>=13.0",
+]
+
+[project.scripts]
+nputop = "nputop:main"
+
+[project.urls]
+Homepage = "https://github.com/mcolsen/nputop"
+Issues = "https://github.com/mcolsen/nputop/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nputop"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/nputop",
+    "README.md",
+    "LICENSE",
+    "TODO.md",
+    "pyproject.toml",
+]
