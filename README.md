@@ -1,6 +1,6 @@
 # nputop
 
-A lightweight TUI monitor for AMD XDNA2 NPUs.
+A lightweight TUI monitor for AMD XDNA 2 NPUs.
 
 Queries the `amdxdna` kernel driver via ioctls on `/dev/accel/accel0` and 
 renders live telemetry (TOPS, clocks, power mode, runtime PM, per-process
