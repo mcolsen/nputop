@@ -22,7 +22,7 @@ pip install -e .
 
 Tested on:
 
-- AMD Ryzen AI 300 series ("Strix Halo"), firmware 2.7.0.42, Fedora 43, kernel 6.19.
+- AMD Ryzen AI 300 series ("Strix Halo"), firmware 1.1.2.65, Fedora 43, kernel 6.19.
 
 ## Usage
 
@@ -42,7 +42,7 @@ Keyboard controls inside the live view: `+`/`-` adjust the refresh rate,
 ### Header
 
 ```
-nputop -- NPU Strix Halo [0000:c4:00.1] -- FW 2.7.0.42 -- AIE 5.0 (8x6)
+nputop -- NPU Strix Halo [0000:c4:00.1] -- FW 1.1.2.65 -- AIE 1.1 (8x6)
 ```
 
 | Field | Description |
