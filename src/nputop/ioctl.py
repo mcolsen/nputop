@@ -5,6 +5,7 @@ defined in /usr/include/drm/amdxdna_accel.h.
 """
 
 import ctypes
+import errno
 import fcntl
 import os
 import struct
@@ -297,22 +298,39 @@ class NpuDevice:
     def _get_array(
         self, param: int, element_type: type, max_elements: int
     ) -> list:
-        """Issue DRM_IOCTL_AMDXDNA_GET_ARRAY and return a list of elements."""
-        ArrayType = element_type * max_elements
-        arr = ArrayType()
-        payload = bytearray(
-            struct.pack(
-                "IIIIQ",
-                param,
-                ctypes.sizeof(element_type),
-                max_elements,
-                0,
-                ctypes.addressof(arr),
+        """Issue DRM_IOCTL_AMDXDNA_GET_ARRAY and return a list of elements.
+
+        The kernel returns ENOSPC and writes the required element count back
+        into num_element when our buffer is too small; retry with a larger
+        buffer using that hint.
+        """
+        for _ in range(4):
+            ArrayType = element_type * max_elements
+            arr = ArrayType()
+            payload = bytearray(
+                struct.pack(
+                    "IIIIQ",
+                    param,
+                    ctypes.sizeof(element_type),
+                    max_elements,
+                    0,
+                    ctypes.addressof(arr),
+                )
             )
+            try:
+                fcntl.ioctl(self._fd, _IOC_GET_ARRAY, payload)
+            except OSError as e:
+                if e.errno != errno.ENOSPC:
+                    raise
+                _, _, needed, _, _ = struct.unpack("IIIIQ", payload)
+                max_elements = max(needed, max_elements * 2)
+                continue
+            _, _, num_returned, _, _ = struct.unpack("IIIIQ", payload)
+            return [arr[i] for i in range(num_returned)]
+        raise OSError(
+            errno.ENOSPC,
+            f"GET_ARRAY param={param}: buffer kept being too small after retries",
         )
-        fcntl.ioctl(self._fd, _IOC_GET_ARRAY, payload)
-        _, _, num_returned, _, _ = struct.unpack("IIIIQ", payload)
-        return [arr[i] for i in range(num_returned)]
 
     def _read_sysfs(self, name: str, fallback: str = "") -> str:
         if self._pci_path is None:
