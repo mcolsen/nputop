@@ -28,6 +28,8 @@ _DEFAULT_INTERVAL = 1.0
 _MIN_INTERVAL = 0.1
 _MAX_INTERVAL = 10.0
 
+_SPARK = "▁▂▃▄▅▆▇█"
+
 
 def _format_duration(ms: int) -> str:
     """Format milliseconds into a human-readable duration."""
@@ -120,22 +122,57 @@ def _header_panel(dev: NpuDevice, bp: str) -> Panel:
     )
 
 
-def _tops_panel(res, bar_w: int) -> Panel:
+def _column_spark(utilization) -> Text:
+    """One block glyph per NPU column, height proportional to busy percent."""
+    spark = Text()
+    for pct in utilization:
+        if pct <= 0:
+            spark.append(_SPARK[0], style="dim")
+            continue
+        idx = min(int(pct / 100 * len(_SPARK)), len(_SPARK) - 1)
+        if pct >= 80:
+            style = "bold red"
+        elif pct >= 50:
+            style = "bold yellow"
+        else:
+            style = "bold green"
+        spark.append(_SPARK[idx], style=style)
+    return spark
+
+
+def _utilization_panel(res, sensors, bar_w: int, height: int) -> Panel:
+    """Busy percentage when the driver reports it, TOPS capacity otherwise."""
+    util = sensors.mean_utilization if sensors else None
     body = Text()
-    body.append(f"{res.tops_curr} / {res.tops_max} TOPS\n", style="bold")
-    body.append_text(_bar(res.tops_curr, res.tops_max, width=bar_w))
-    body.append(f"\nTasks  {res.task_curr} / {res.task_max}")
+
+    if util is None:
+        # No sensor support: fall back to TOPS, which tracks the clock rather
+        # than the load, so it reads high whenever the NPU is clocked up.
+        body.append(f"{res.tops_curr} / {res.tops_max} TOPS\n", style="bold")
+        body.append_text(_bar(res.tops_curr, res.tops_max, width=bar_w))
+        body.append(f"\nTasks  {res.task_curr} / {res.task_max}")
+        title = "TOPS & Tasks"
+    else:
+        body.append(f"{util:.0f} % busy\n", style="bold")
+        body.append_text(_bar(round(util), 100, width=bar_w))
+        body.append("\ncols ")
+        body.append_text(_column_spark(sensors.column_utilization))
+        body.append(f"\nTasks {res.task_curr}/{res.task_max}")
+        body.append(f"   TOPS {res.tops_curr}/{res.tops_max}", style="dim")
+        title = "Utilization"
+
     return Panel(
         body,
-        title=Text("TOPS & Tasks", style="bold"),
+        title=Text(title, style="bold"),
         border_style="blue",
         box=box.ROUNDED,
         title_align="left",
         padding=(0, 1),
+        height=height,
     )
 
 
-def _clocks_panel(clocks, res) -> Panel:
+def _clocks_panel(clocks, res, height: int) -> Panel:
     body = Text()
     body.append(f"{clocks.mp_npu_name:<10} {clocks.mp_npu_mhz:>4} MHz\n")
     body.append(f"{clocks.h_clock_name:<10} {clocks.h_clock_mhz:>4} MHz\n")
@@ -147,11 +184,15 @@ def _clocks_panel(clocks, res) -> Panel:
         box=box.ROUNDED,
         title_align="left",
         padding=(0, 1),
+        height=height,
     )
 
 
-def _power_panel(mode: str, pm) -> Panel:
+def _power_panel(mode: str, pm, sensors, height: int) -> Panel:
     body = Text()
+    if sensors is not None and sensors.total_power_w is not None:
+        body.append("Draw  ")
+        body.append(f"{sensors.total_power_w:.2f} W\n", style="bold")
     body.append("Mode  ")
     body.append(
         f"{mode}\n",
@@ -171,29 +212,45 @@ def _power_panel(mode: str, pm) -> Panel:
         box=box.ROUNDED,
         title_align="left",
         padding=(0, 1),
+        height=height,
     )
 
 
-def _telemetry_renderable(res, clocks, mode: str, pm, bp: str, bar_w: int):
+def _telemetry_renderable(res, clocks, mode: str, pm, sensors, bp: str, bar_w: int):
     """Side-by-side panels at wide/medium; stacked single panel at narrow/tiny."""
+    util = sensors.mean_utilization if sensors else None
+    power = sensors.total_power_w if sensors else None
+
     if bp in ("wide", "medium"):
+        # Panels gain a line when sensors are present, and Rich sizes each one
+        # independently -- pin them to a common height so the borders align.
+        rows = 4 if (util is not None or power is not None) else 3
+        height = rows + 2
         grid = Table.grid(expand=True, padding=(0, 0))
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
         grid.add_column(ratio=1)
         grid.add_row(
-            _tops_panel(res, bar_w),
-            _clocks_panel(clocks, res),
-            _power_panel(mode, pm),
+            _utilization_panel(res, sensors, bar_w, height),
+            _clocks_panel(clocks, res, height),
+            _power_panel(mode, pm, sensors, height),
         )
         return grid
 
     body = Text()
-    body.append("TOPS  ")
-    body.append(f"{res.tops_curr}/{res.tops_max}  ", style="bold")
-    body.append_text(_bar(res.tops_curr, res.tops_max, width=bar_w))
+    if util is None:
+        body.append("TOPS  ")
+        body.append(f"{res.tops_curr}/{res.tops_max}  ", style="bold")
+        body.append_text(_bar(res.tops_curr, res.tops_max, width=bar_w))
+    else:
+        body.append("Busy  ")
+        body.append(f"{util:>3.0f}% ", style="bold")
+        body.append_text(_bar(round(util), 100, width=bar_w))
     body.append(f"\nTasks {res.task_curr}/{res.task_max}\n")
     body.append(f"Clk   {clocks.mp_npu_mhz}/{res.clk_max_mhz} MHz\n", style="dim")
+    if sensors is not None and sensors.total_power_w is not None:
+        body.append("Draw  ")
+        body.append(f"{sensors.total_power_w:.2f} W\n", style="bold")
     body.append("Mode  ")
     body.append(
         f"{mode}\n",
@@ -331,11 +388,12 @@ def build_display(dev: NpuDevice, console: Console, interval: float):
     clocks = dev.query_clocks()
     mode = dev.query_power_mode()
     pm = dev.query_runtime_pm()
+    sensors = dev.query_sensors()
     contexts = dev.query_hw_contexts()
 
     return Group(
         _header_panel(dev, bp),
-        _telemetry_renderable(res, clocks, mode, pm, bp, bar_w),
+        _telemetry_renderable(res, clocks, mode, pm, sensors, bp, bar_w),
         _contexts_panel(contexts, bp),
         _footer_text(interval, bp),
     )

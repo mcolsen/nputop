@@ -39,12 +39,23 @@ _IOC_GET_ARRAY = _iowr(_DRM_TYPE, _DRM_COMMAND_BASE + _DRM_AMDXDNA_GET_ARRAY, 24
 # enum amdxdna_drm_get_param
 _PARAM_AIE_METADATA = 1
 _PARAM_CLOCK_METADATA = 3
+_PARAM_SENSORS = 4
 _PARAM_FIRMWARE_VERSION = 8
 _PARAM_POWER_MODE = 9
 _PARAM_RESOURCE_INFO = 12
 
 # GET_ARRAY params
 _HW_CONTEXT_ALL = 0
+
+# Sensor types (struct amdxdna_drm_query_sensor.type)
+_SENSOR_TYPE_POWER = 0
+_SENSOR_TYPE_COLUMN_UTILIZATION = 1
+_SENSOR_TYPE_TEMPERATURE = 2
+
+# The driver emits one power sensor plus one per column, capped at 8 columns.
+# It truncates silently rather than returning ENOSPC, so ask for more than
+# that and trust the byte count it writes back.
+_MAX_SENSORS = 32
 
 # Power mode names (enum amdxdna_power_mode_type)
 POWER_MODES = ["DEFAULT", "LOW", "MEDIUM", "HIGH", "TURBO"]
@@ -103,6 +114,21 @@ class _ResourceInfo(ctypes.Structure):
         ("npu_task_max", ctypes.c_uint64),
         ("npu_tops_curr", ctypes.c_uint64),
         ("npu_task_curr", ctypes.c_uint64),
+    ]
+
+
+class _Sensor(ctypes.Structure):
+    _fields_ = [
+        ("label", ctypes.c_char * 64),
+        ("input", ctypes.c_uint32),
+        ("max", ctypes.c_uint32),
+        ("average", ctypes.c_uint32),
+        ("highest", ctypes.c_uint32),
+        ("status", ctypes.c_char * 64),
+        ("units", ctypes.c_char * 16),
+        ("unitm", ctypes.c_int8),
+        ("type", ctypes.c_uint8),
+        ("pad", ctypes.c_uint8 * 6),
     ]
 
 
@@ -219,6 +245,25 @@ class HwContext:
 
 
 @dataclass
+class Sensors:
+    """Live NPU sensor readings.
+
+    `total_power_w` is the NPU package draw, not the SoC package -- on a
+    shared-die part the CPU and iGPU are counted separately.
+    """
+
+    total_power_w: float | None
+    column_utilization: list[float]
+
+    @property
+    def mean_utilization(self) -> float | None:
+        """Average busy percentage across columns, or None if unreported."""
+        if not self.column_utilization:
+            return None
+        return sum(self.column_utilization) / len(self.column_utilization)
+
+
+@dataclass
 class RuntimePM:
     status: str  # "active", "suspended", etc.
     active_time_ms: int
@@ -294,6 +339,20 @@ class NpuDevice:
             struct.pack("IIQ", param, ctypes.sizeof(buf), ctypes.addressof(buf))
         )
         fcntl.ioctl(self._fd, _IOC_GET_INFO, payload)
+
+    def _get_info_sized(self, param: int, buf) -> int:
+        """Issue GET_INFO for a variable-length reply; return bytes written.
+
+        Unlike _get_info, which expects the reply to fill a fixed struct, this
+        passes an oversized buffer and reports how much of it the kernel
+        actually used (it writes the byte count back into buffer_size).
+        """
+        payload = bytearray(
+            struct.pack("IIQ", param, ctypes.sizeof(buf), ctypes.addressof(buf))
+        )
+        fcntl.ioctl(self._fd, _IOC_GET_INFO, payload)
+        _, written, _ = struct.unpack("IIQ", payload)
+        return min(written, ctypes.sizeof(buf))
 
     def _get_array(
         self, param: int, element_type: type, max_elements: int
@@ -376,6 +435,34 @@ class NpuDevice:
             tops_curr=buf.npu_tops_curr,
             task_curr=buf.npu_task_curr,
         )
+
+    def query_sensors(self) -> "Sensors | None":
+        """Read package power and per-column busy percentages.
+
+        Returns None when the driver cannot supply sensors. The query is
+        backed by amd_pmf NPU metrics, so it is unavailable on PHX/HPT parts
+        and on driver builds without HAVE_7_0_amd_pmf_get_npu_data. Note that
+        all-zero readings are a legitimate idle result, not a missing sensor.
+        """
+        buf = (_Sensor * _MAX_SENSORS)()
+        try:
+            written = self._get_info_sized(_PARAM_SENSORS, buf)
+        except OSError:
+            return None
+
+        power = None
+        columns = []
+        for i in range(written // ctypes.sizeof(_Sensor)):
+            sensor = buf[i]
+            # The driver reports a raw integer plus a decimal exponent;
+            # scaling by 10**unitm lands on the SI base unit, so the power
+            # sensor's mW with unitm -3 becomes watts.
+            value = sensor.input * (10.0**sensor.unitm)
+            if sensor.type == _SENSOR_TYPE_POWER:
+                power = value
+            elif sensor.type == _SENSOR_TYPE_COLUMN_UTILIZATION:
+                columns.append(value)
+        return Sensors(total_power_w=power, column_utilization=columns)
 
     def query_power_mode(self) -> str:
         buf = _PowerMode()

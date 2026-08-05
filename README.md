@@ -53,16 +53,26 @@ nputop -- NPU Strix Halo [0000:c4:00.1] -- FW 1.1.2.65 -- AIE 1.1 (8x6)
 | AIE version | AI Engine silicon revision |
 | Cols x Rows | Physical tile grid dimensions. Columns are the schedulable unit -- workloads get assigned column ranges |
 
-### TOPS
+### Utilization
 
 ```
-TOPS:  [########..........] 25 / 58           Tasks: 0 / 128
+91 % busy
+[##########################...]
+cols ########
+Tasks 4/16   TOPS 59/58
 ```
 
 | Field | Description |
 |-------|-------------|
-| tops_curr / tops_max | Peak INT8 throughput (tera-operations/sec) **available at the current clock frequency**. This is a capacity metric, not utilization -- it scales with the NPU clock. At idle, power management clocks the NPU down, so `tops_curr` drops well below `tops_max` |
-| Tasks | Commands currently in-flight on the NPU vs. the firmware queue limit. This *is* a utilization metric -- 0 at idle, nonzero during inference |
+| busy | Mean busy percentage across the NPU's columns, read from the driver's sensor block. This is the true utilization metric -- 0 at idle regardless of clock speed |
+| cols | Per-column busy percentage, one block glyph per column, taller = busier. Shows whether a workload is spread across the array or confined to a few columns |
+| tops_curr / tops_max | Peak INT8 throughput (tera-operations/sec) **available at the current clock frequency**. This is a capacity metric, not utilization -- it scales with the NPU clock. At idle, power management clocks the NPU down, so `tops_curr` drops well below `tops_max`. It can also read slightly above `tops_max`, which the driver derives from a nominal clock |
+| Tasks | Commands currently in-flight on the NPU vs. the firmware queue limit. Also a utilization metric -- 0 at idle, nonzero during inference |
+
+If the driver does not report sensors this panel falls back to the TOPS
+capacity bar and is titled `TOPS & Tasks`. Sensor readings come from amd_pmf
+NPU metrics, which are unavailable on PHX/HPT parts and on driver builds
+compiled without `HAVE_7_0_amd_pmf_get_npu_data`.
 
 ### Clocks and power
 
@@ -76,6 +86,7 @@ Clock: mp_npu_clock 1890 MHz   h_clock 1024 MHz  (max 1890 MHz)  Mode: DEFAULT
 | h_clock | Data fabric / interconnect clock. Affects memory bandwidth between tiles and to/from system memory |
 | max | Maximum supported mp_npu_clock frequency |
 | Mode | Power mode: `DEFAULT`, `LOW`, `MEDIUM`, `HIGH`, or `TURBO`. Controls how aggressively the driver clocks the NPU |
+| Draw | NPU package power in watts. This is the NPU block alone -- on a shared-die part the CPU and iGPU are metered separately, so it is not SoC package power. Omitted when the driver reports no power sensor |
 
 ### Runtime PM
 
