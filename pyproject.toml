@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "A lightweight TUI monitor for the AMD XDNA2 NPU"
 readme = "README.md"
 requires-python = ">=3.10"
-license = "GPL-3.0-or-later"
+license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Maria Olsen" }]
 keywords = ["npu", "amdxdna", "xdna2", "strix-halo", "ryzen-ai", "tui", "monitor"]
